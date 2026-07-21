@@ -97,6 +97,47 @@ def list_hosts() -> list | dict:
 
 
 @mcp.tool()
+def disk_usage(mount: str = "", min_pct_used: float = 0.0) -> list | dict:
+    """Return filesystem usage per host. Use for 'how much space is free in
+    /var', 'which servers are low on disk', 'show mounts over 90% full'.
+    `mount` filters to matching mount paths (e.g. '/var'); `min_pct_used` keeps
+    only mounts at/above that percent full. Sizes are bytes: divide by 1024**3
+    for GB. size_available is the free space. Values reflect the last
+    collection run, not this instant (disk usage drifts slowly, so this is
+    usually fine)."""
+    sql = (
+        "SELECT h.hostname, h.primary_ip, m.mount, m.fstype, m.size_total, "
+        "m.size_available, m.pct_used, h.collected_at "
+        "FROM hosts h JOIN mounts m ON m.hostname = h.hostname WHERE 1=1"
+    )
+    params = []
+    if mount:
+        sql += " AND m.mount LIKE ?"
+        params.append(f"%{mount}%")
+    if min_pct_used:
+        sql += " AND m.pct_used >= ?"
+        params.append(min_pct_used)
+    sql += " ORDER BY m.pct_used DESC, h.hostname"
+    return _rows(sql, tuple(params))
+
+
+@mcp.tool()
+def memory_usage() -> list | dict:
+    """Return memory and swap per host in MB. Use for 'how much RAM do servers
+    have', 'which servers have the least free memory'. IMPORTANT: mem_total_mb
+    and swap_total_mb are accurate (static hardware), but mem_free_mb is only a
+    point-in-time SAMPLE taken during the last collection run -- it is NOT the
+    live free memory right now. For real-time free RAM, a live refresh or a
+    monitoring system is needed. Includes collected_at so you can state how old
+    the sample is."""
+    return _rows(
+        "SELECT hostname, primary_ip, mem_total_mb, mem_free_mb, "
+        "swap_total_mb, swap_free_mb, collected_at FROM hosts "
+        "ORDER BY mem_free_mb ASC"
+    )
+
+
+@mcp.tool()
 def os_breakdown() -> list | dict:
     """Return a count of servers grouped by distribution and version."""
     return _rows(
@@ -110,8 +151,11 @@ def run_select(sql: str) -> list | dict:
     """Escape hatch for arbitrary read-only questions. Runs a single SELECT
     against the fleet database. Tables: hosts(hostname, primary_ip, all_ips,
     os_family, distribution, distribution_version, kernel, architecture,
-    collected_at), packages(hostname, name, version, arch),
-    services(hostname, name, state, status, source). Only SELECT is permitted."""
+    mem_total_mb, mem_free_mb, swap_total_mb, swap_free_mb, collected_at),
+    packages(hostname, name, version, arch),
+    services(hostname, name, state, status, source),
+    mounts(hostname, mount, device, fstype, size_total, size_available,
+    pct_used). size_* are bytes. Only SELECT is permitted."""
     if not sql.strip().lower().startswith("select"):
         return {"error": "Only read-only SELECT statements are allowed."}
     return _rows(sql)

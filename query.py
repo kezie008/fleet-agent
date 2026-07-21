@@ -93,6 +93,49 @@ def cmd_host(conn, args):
                 "distribution_version", "kernel", "collected_at"], args.json)
 
 
+def _gb(num_bytes):
+    try:
+        return f"{int(num_bytes) / (1024 ** 3):.1f}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def cmd_disk(conn, args):
+    sql = (
+        "SELECT h.hostname, h.primary_ip, m.mount, m.fstype, "
+        "m.size_total, m.size_available, m.pct_used "
+        "FROM hosts h JOIN mounts m ON m.hostname = h.hostname WHERE 1=1"
+    )
+    params = []
+    if args.mount:
+        sql += " AND m.mount LIKE ?"
+        params.append(f"%{args.mount}%")
+    if args.min_pct is not None:
+        sql += " AND m.pct_used >= ?"
+        params.append(args.min_pct)
+    sql += " ORDER BY m.pct_used DESC, h.hostname"
+    rows = conn.execute(sql, params).fetchall()
+    # Present bytes as human GB.
+    pretty = []
+    for r in rows:
+        d = dict(r)
+        d["total_gb"] = _gb(d.pop("size_total"))
+        d["free_gb"] = _gb(d.pop("size_available"))
+        pretty.append(d)
+    emit(pretty, ["hostname", "primary_ip", "mount",
+         "fstype", "total_gb", "free_gb", "pct_used"], args.json)
+
+
+def cmd_mem(conn, args):
+    rows = conn.execute(
+        "SELECT hostname, primary_ip, mem_total_mb, mem_free_mb, "
+        "swap_total_mb, swap_free_mb, collected_at FROM hosts "
+        "ORDER BY mem_free_mb ASC"
+    ).fetchall()
+    emit(rows, ["hostname", "primary_ip", "mem_total_mb", "mem_free_mb",
+                "swap_total_mb", "swap_free_mb", "collected_at"], args.json)
+
+
 def cmd_os(conn, args):
     rows = conn.execute(
         """SELECT distribution, distribution_version, COUNT(*) AS count
@@ -132,6 +175,16 @@ def main():
     p = sub.add_parser("host", help="show details for a host")
     p.add_argument("name")
     p.set_defaults(func=cmd_host)
+
+    p = sub.add_parser("disk", help="filesystem usage across the fleet")
+    p.add_argument("mount", nargs="?", default=None,
+                   help="filter to mounts matching this path, e.g. /var")
+    p.add_argument("--min-pct", type=float, default=None, dest="min_pct",
+                   help="only show mounts at/above this %% used")
+    p.set_defaults(func=cmd_disk)
+
+    p = sub.add_parser("mem", help="memory/swap per host (as of last collection)")
+    p.set_defaults(func=cmd_mem)
 
     p = sub.add_parser("os", help="count hosts by OS/version")
     p.set_defaults(func=cmd_os)

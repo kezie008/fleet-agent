@@ -61,6 +61,14 @@
           kernel: "{{ ansible_facts.kernel | default('') }}"
           architecture: "{{ ansible_facts.architecture | default('') }}"
           collected_at: "{{ ansible_date_time.iso8601 | default('') }}"
+          # Memory (MB). *_total is static; *_free is a point-in-time sample
+          # taken at collection, NOT a live reading.
+          mem_total_mb: "{{ ansible_facts.memtotal_mb | default(0) }}"
+          mem_free_mb: "{{ ansible_facts.memfree_mb | default(0) }}"
+          swap_total_mb: "{{ ansible_facts.swaptotal_mb | default(0) }}"
+          swap_free_mb: "{{ ansible_facts.swapfree_mb | default(0) }}"
+          # Mounted filesystems. sizes in bytes; size_available drifts slowly.
+          mounts: "{{ ansible_facts.mounts | default([]) }}"
           # packages: {name: [{name,version,arch,...}]} -> [{name,version,arch}]
           packages: >-
             {{ ansible_facts.packages | default({}) | dict2items

@@ -35,6 +35,7 @@ SCHEMA = """
 DROP TABLE IF EXISTS hosts;
 DROP TABLE IF EXISTS packages;
 DROP TABLE IF EXISTS services;
+DROP TABLE IF EXISTS mounts;
 
 CREATE TABLE hosts (
     hostname             TEXT PRIMARY KEY,
@@ -46,6 +47,10 @@ CREATE TABLE hosts (
     distribution_version TEXT,
     kernel               TEXT,
     architecture         TEXT,
+    mem_total_mb         INTEGER,
+    mem_free_mb          INTEGER,
+    swap_total_mb        INTEGER,
+    swap_free_mb         INTEGER,
     collected_at         TEXT
 );
 
@@ -64,11 +69,31 @@ CREATE TABLE services (
     source   TEXT
 );
 
+CREATE TABLE mounts (
+    hostname       TEXT,
+    mount          TEXT,
+    device         TEXT,
+    fstype         TEXT,
+    size_total     INTEGER,   -- bytes
+    size_available INTEGER,   -- bytes
+    pct_used       REAL       -- 0-100
+);
+
 CREATE INDEX idx_pkg_name ON packages(name);
 CREATE INDEX idx_pkg_host ON packages(hostname);
 CREATE INDEX idx_svc_name ON services(name);
 CREATE INDEX idx_svc_host ON services(hostname);
+CREATE INDEX idx_mnt_host ON mounts(hostname);
+CREATE INDEX idx_mnt_mount ON mounts(mount);
 """
+
+
+def _int(value):
+    """Best-effort int coercion; Ansible often hands us numeric strings."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def load_snapshot(path):
@@ -93,6 +118,7 @@ def build(facts_dir, db_path):
     host_rows = 0
     pkg_rows = 0
     svc_rows = 0
+    mnt_rows = 0
 
     for path in snapshots:
         try:
@@ -106,8 +132,9 @@ def build(facts_dir, db_path):
             """INSERT OR REPLACE INTO hosts
                (hostname, inventory_hostname, primary_ip, all_ips, os_family,
                 distribution, distribution_version, kernel, architecture,
+                mem_total_mb, mem_free_mb, swap_total_mb, swap_free_mb,
                 collected_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 hostname,
                 snap.get("inventory_hostname", ""),
@@ -118,6 +145,10 @@ def build(facts_dir, db_path):
                 snap.get("distribution_version", ""),
                 snap.get("kernel", ""),
                 snap.get("architecture", ""),
+                _int(snap.get("mem_total_mb")),
+                _int(snap.get("mem_free_mb")),
+                _int(snap.get("swap_total_mb")),
+                _int(snap.get("swap_free_mb")),
                 snap.get("collected_at", ""),
             ),
         )
@@ -145,6 +176,22 @@ def build(facts_dir, db_path):
             )
             svc_rows += 1
 
+        for mnt in snap.get("mounts", []) or []:
+            if not isinstance(mnt, dict):
+                continue
+            total = _int(mnt.get("size_total"))
+            avail = _int(mnt.get("size_available"))
+            pct = round((total - avail) / total * 100, 1) if total else None
+            conn.execute(
+                """INSERT INTO mounts
+                   (hostname, mount, device, fstype, size_total,
+                    size_available, pct_used)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (hostname, mnt.get("mount", ""), mnt.get("device", ""),
+                 mnt.get("fstype", ""), total, avail, pct),
+            )
+            mnt_rows += 1
+
     conn.commit()
     conn.close()
 
@@ -152,7 +199,8 @@ def build(facts_dir, db_path):
         f"Built {db_path}\n"
         f"  hosts:    {host_rows}\n"
         f"  packages: {pkg_rows}\n"
-        f"  services: {svc_rows}"
+        f"  services: {svc_rows}\n"
+        f"  mounts:   {mnt_rows}"
     )
     return 0
 
