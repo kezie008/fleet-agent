@@ -1,0 +1,11 @@
+[Unit]
+Description=Run fleet fact collection daily
+
+[Timer]
+# Every day at 02:00 (with a randomized delay to avoid a thundering herd).
+OnCalendar=*-*-* 02:00:00
+RandomizedDelaySec=900
+Persistent=true
+
+[Install]
+WantedBy=timers.target

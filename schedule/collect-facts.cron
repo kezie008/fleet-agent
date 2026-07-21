@@ -1,0 +1,7 @@
+# Fleet fact collection -- cron approach (simplest).
+# Install on the control node with:  crontab -e   (then paste, editing paths)
+#
+# Runs collection + rebuilds the DB every day at 02:00. Adjust the schedule and
+# the /opt/fleet-agent path to match your install.
+
+0 2 * * *  cd /opt/fleet-agent && /usr/bin/ansible-playbook -i inventory/hosts.ini collect_facts.yml >> logs/collect.log 2>&1 && /usr/bin/python3 build_db.py >> logs/build.log 2>&1

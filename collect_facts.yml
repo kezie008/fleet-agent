@@ -1,0 +1,71 @@
+---
+# =============================================================================
+# collect_facts.yml
+#
+# Read-only fact collection across the whole fleet. For each host it gathers:
+#   - system facts   (IPs, OS, distro/version, kernel, arch)
+#   - package facts  (every installed package + version)
+#   - service facts  (every known service + running state)
+#
+# and writes ONE json snapshot per host to data/facts/<host>.json on the
+# control node. build_db.py then folds those snapshots into data/fleet.db.
+#
+# Nothing is changed on the target servers -- this playbook only reads.
+#
+# Run:
+#   ansible-playbook -i inventory/hosts.ini collect_facts.yml
+# =============================================================================
+
+- name: Collect fleet inventory facts
+  hosts: all
+  gather_facts: true
+  become: true
+  # Keep going even if a few hosts are unreachable -- collect what we can.
+  any_errors_fatal: false
+  vars:
+    facts_dir: "{{ playbook_dir }}/data/facts"
+
+  tasks:
+    - name: Gather installed package facts
+      ansible.builtin.package_facts:
+        manager: auto
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Ensure local snapshot directory exists
+      ansible.builtin.file:
+        path: "{{ facts_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Write per-host snapshot to the control node
+      ansible.builtin.copy:
+        dest: "{{ facts_dir }}/{{ inventory_hostname }}.json"
+        mode: "0644"
+        content: "{{ host_snapshot | to_nice_json }}"
+      delegate_to: localhost
+      become: false
+      vars:
+        host_snapshot:
+          hostname: "{{ ansible_facts.fqdn | default(inventory_hostname) }}"
+          inventory_hostname: "{{ inventory_hostname }}"
+          primary_ip: "{{ ansible_facts.default_ipv4.address | default('') }}"
+          all_ipv4: "{{ ansible_facts.all_ipv4_addresses | default([]) }}"
+          os_family: "{{ ansible_facts.os_family | default('') }}"
+          distribution: "{{ ansible_facts.distribution | default('') }}"
+          distribution_version: "{{ ansible_facts.distribution_version | default('') }}"
+          kernel: "{{ ansible_facts.kernel | default('') }}"
+          architecture: "{{ ansible_facts.architecture | default('') }}"
+          collected_at: "{{ ansible_date_time.iso8601 | default('') }}"
+          # packages: {name: [{name,version,arch,...}]} -> [{name,version,arch}]
+          packages: >-
+            {{ ansible_facts.packages | default({}) | dict2items
+               | map(attribute='value') | map('first') | list }}
+          # services: {name: {name,state,status,source}} -> [ {..}, {..} ]
+          services: >-
+            {{ ansible_facts.services | default({}) | dict2items
+               | map(attribute='value') | list }}

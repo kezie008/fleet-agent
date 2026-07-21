@@ -1,0 +1,10 @@
+# Control-node Python dependencies.
+#
+# build_db.py and query.py use only the Python standard library -- no installs
+# needed for those. The line below is ONLY required for the conversational
+# AI-agent interface (mcp_server.py).
+mcp>=1.2.0
+
+# Ansible itself is installed separately on the control node, e.g.:
+#   python3 -m pip install ansible-core
+# or via your distro package manager (dnf install ansible / apt install ansible).

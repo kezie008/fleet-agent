@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""
+mcp_server.py
+
+The conversational AI-agent interface. This exposes the fleet database to
+Claude (Claude Code, Claude Desktop, or any MCP client) as a set of read-only
+tools. Once connected you can just ask, in plain English:
+
+    "Which servers have CrowdStrike installed?"
+    "List everything running an ssh service on Ubuntu boxes."
+    "What OS is db01 on and when was it last collected?"
+
+Claude picks the right tool below, runs it against real collected data, and
+answers with actual server names and IPs -- it never guesses.
+
+Run standalone (stdio transport):
+    pip install -r requirements.txt
+    python3 mcp_server.py
+
+Register with Claude Code (on the control node):
+    claude mcp add fleet -- python3 /path/to/fleet-agent/mcp_server.py
+
+Security: every tool is READ-ONLY. The server can only SELECT from the local
+snapshot database -- it has no SSH access and cannot change anything anywhere.
+"""
+
+import os
+import sqlite3
+
+from mcp.server.fastmcp import FastMCP
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.environ.get("FLEET_DB", os.path.join(HERE, "data", "fleet.db"))
+
+mcp = FastMCP("fleet-agent")
+
+
+def _rows(sql, params=()):
+    if not os.path.exists(DB_PATH):
+        return {"error": f"Database not found at {DB_PATH}. "
+                         f"Run collect_facts.yml then build_db.py."}
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(sql, params)
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def find_servers_by_package(term: str) -> list | dict:
+    """Return servers that have an installed package whose name matches `term`
+    (substring, case-insensitive). Use this for questions like 'which servers
+    have crowdstrike/falcon/nginx/openssl installed'. Returns hostname,
+    primary_ip, matched package name and version."""
+    return _rows(
+        """SELECT DISTINCT h.hostname, h.primary_ip, p.name AS package, p.version
+           FROM hosts h JOIN packages p ON p.hostname = h.hostname
+           WHERE p.name LIKE ? ORDER BY h.hostname""",
+        (f"%{term}%",),
+    )
+
+
+@mcp.tool()
+def find_servers_by_service(term: str) -> list | dict:
+    """Return servers that have a service whose name matches `term`, with its
+    running state. Use for 'which servers run the falcon-sensor / sshd / docker
+    service'. Returns hostname, primary_ip, service name and state."""
+    return _rows(
+        """SELECT DISTINCT h.hostname, h.primary_ip, s.name AS service, s.state
+           FROM hosts h JOIN services s ON s.hostname = h.hostname
+           WHERE s.name LIKE ? ORDER BY h.hostname""",
+        (f"%{term}%",),
+    )
+
+
+@mcp.tool()
+def get_host(name: str) -> list | dict:
+    """Return full detail for a host matching `name` (hostname or inventory
+    name, substring match): IPs, OS/distro/version, kernel, and when it was
+    last collected."""
+    return _rows(
+        "SELECT * FROM hosts WHERE hostname LIKE ? OR inventory_hostname LIKE ?",
+        (f"%{name}%", f"%{name}%"),
+    )
+
+
+@mcp.tool()
+def list_hosts() -> list | dict:
+    """Return every server the agent knows about: hostname, primary_ip,
+    distribution and version. Use for 'how many servers / list all servers'."""
+    return _rows(
+        "SELECT hostname, primary_ip, distribution, distribution_version "
+        "FROM hosts ORDER BY hostname"
+    )
+
+
+@mcp.tool()
+def os_breakdown() -> list | dict:
+    """Return a count of servers grouped by distribution and version."""
+    return _rows(
+        "SELECT distribution, distribution_version, COUNT(*) AS count "
+        "FROM hosts GROUP BY distribution, distribution_version ORDER BY count DESC"
+    )
+
+
+@mcp.tool()
+def run_select(sql: str) -> list | dict:
+    """Escape hatch for arbitrary read-only questions. Runs a single SELECT
+    against the fleet database. Tables: hosts(hostname, primary_ip, all_ips,
+    os_family, distribution, distribution_version, kernel, architecture,
+    collected_at), packages(hostname, name, version, arch),
+    services(hostname, name, state, status, source). Only SELECT is permitted."""
+    if not sql.strip().lower().startswith("select"):
+        return {"error": "Only read-only SELECT statements are allowed."}
+    return _rows(sql)
+
+
+if __name__ == "__main__":
+    mcp.run()

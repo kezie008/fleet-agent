@@ -1,0 +1,19 @@
+# systemd approach (paired with fleet-collect.timer).
+# Install:
+#   sudo cp schedule/fleet-collect.* /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now fleet-collect.timer
+#
+# Edit User= and the /opt/fleet-agent paths to match your install.
+
+[Unit]
+Description=Collect Linux fleet facts and rebuild fleet.db
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=svc_ansible
+WorkingDirectory=/opt/fleet-agent
+ExecStart=/usr/bin/ansible-playbook -i inventory/hosts.ini collect_facts.yml
+ExecStart=/usr/bin/python3 build_db.py
